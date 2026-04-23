@@ -9,7 +9,7 @@ credibility classification, including web archive enrichment,
 feature engineering, model comparison, and SHAP analysis.
 
 ## Scripts
-- `enrich_low_credibility.py` — recovers low-credibility source HTML
+- `enrich_low_credibilit.py + extra scrape` — recovers low-credibility source HTML
   from the Internet Archive Wayback Machine.
 - `model_comparison_v4.py` — full modeling pipeline: feature extraction,
   Optuna hyperparameter tuning, 5-fold CV, McNemar's test.
