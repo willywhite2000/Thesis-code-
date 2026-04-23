@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Data — not redistributable
+html_front/
+scraped_html/
+css_front/
+thesis_output/html_low_cred/
+results_expanded.json
+
+# Keep only final results
+thesis_output/model_results_v3/
+thesis_output/model_results_optuna/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
