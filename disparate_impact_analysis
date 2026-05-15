@@ -1,0 +1,136 @@
+"""
+disparate_impact_analysis.py
+============================
+ 
+Computes country- and media-type-stratified performance of the best enriched
+model (XGBoost with SMOTE + class weights) by joining saved out-of-fold
+predictions with the cached feature DataFrame. No model retraining.
+ 
+Produces:
+  disparate_impact_results/country_stratified.csv
+  disparate_impact_results/media_stratified.csv
+  disparate_impact_results/country_table.tex
+  disparate_impact_results/media_table.tex
+"""
+ 
+from pathlib import Path
+ 
+import pandas as pd
+from sklearn.metrics import f1_score
+ 
+# ──────────────────────────────────────────────────────────────────────────
+# Configuration
+# ──────────────────────────────────────────────────────────────────────────
+ROOT = Path(r"C:\Users\Wilbe\OneDrive\Desktop\profiling-data-Copy(1)")
+PREDS_PATH = (
+    ROOT / "thesis_output" / "model_results_v4"
+    / "predictions" / "preds_Enriched_XGB_SMOTE_weights.csv"
+)
+FEATURES_PATH = ROOT / "thesis_output" / "model_results_v4" / "enriched_df_cache.pkl"
+OUTPUT_DIR = ROOT / "disparate_impact_results"
+OUTPUT_DIR.mkdir(exist_ok=True)
+ 
+MIN_SUBGROUP = 20  # drop subgroups smaller than this from the reported tables
+ 
+# ──────────────────────────────────────────────────────────────────────────
+# Load
+# ──────────────────────────────────────────────────────────────────────────
+print("Loading predictions...")
+preds = pd.read_csv(PREDS_PATH)
+print(f"  {len(preds)} rows, columns: {list(preds.columns)}")
+ 
+print("Loading feature DataFrame...")
+df = pd.read_pickle(FEATURES_PATH).reset_index(drop=True)
+print(f"  shape: {df.shape}")
+ 
+assert len(preds) == len(df), (
+    f"Length mismatch: preds={len(preds)}, df={len(df)}. "
+    "test_idx may not align with feature DataFrame row positions."
+)
+ 
+# Auto-detect integer encoding for each credibility class from y_true_label
+label_map = dict(sorted(set(zip(preds["y_true"], preds["y_true_label"]))))
+print(f"Label encoding (int -> name): {label_map}")
+ 
+ 
+def find_class(name_options):
+    for i, lab in label_map.items():
+        if str(lab).strip().lower() in name_options:
+            return i
+    return None
+ 
+ 
+LOW = find_class({"low", "low credibility", "low_credibility"})
+MED = find_class({"medium", "med", "medium credibility", "medium_credibility"})
+HIGH = find_class({"high", "high credibility", "high_credibility"})
+assert None not in (LOW, MED, HIGH), (
+    f"Could not auto-detect class encoding from {label_map}. "
+    "Edit the find_class calls above to match your labels."
+)
+print(f"  Resolved: low={LOW}, med={MED}, high={HIGH}")
+ 
+# Join predictions with subgroup features
+merged = preds.merge(
+    df, left_on="test_idx", right_index=True, how="left", suffixes=("", "_feat")
+)
+assert len(merged) == len(preds), "Merge dropped rows"
+ 
+# Sanity check: overall macro F1 should reproduce Table 1
+overall = f1_score(merged["y_true"], merged["y_pred"], average="macro")
+print(f"\nSanity check - overall macro F1: {overall:.3f} (expected approx 0.594)")
+ 
+ 
+# ──────────────────────────────────────────────────────────────────────────
+# Stratified evaluation
+# ──────────────────────────────────────────────────────────────────────────
+def metrics_for_mask(mask, label):
+    if mask.sum() < MIN_SUBGROUP:
+        return None
+    yt = merged.loc[mask, "y_true"]
+    yp = merged.loc[mask, "y_pred"]
+    return {
+        "subgroup": label,
+        "n": int(mask.sum()),
+        "n_low": int((yt == LOW).sum()),
+        "n_med": int((yt == MED).sum()),
+        "n_high": int((yt == HIGH).sum()),
+        "macro_f1": f1_score(yt, yp, average="macro", zero_division=0),
+        "low_f1": f1_score(yt, yp, labels=[LOW], average="macro", zero_division=0),
+        "med_f1": f1_score(yt, yp, labels=[MED], average="macro", zero_division=0),
+        "high_f1": f1_score(yt, yp, labels=[HIGH], average="macro", zero_division=0),
+    }
+ 
+ 
+all_mask = pd.Series(True, index=merged.index)
+ 
+# Country
+country_cols = sorted(c for c in df.columns if c.startswith("country_"))
+country_rows = [metrics_for_mask(all_mask, "All")]
+for col in country_cols:
+    name = col.replace("country_", "")
+    country_rows.append(metrics_for_mask(merged[col] == 1, name))
+country_df = (
+    pd.DataFrame([r for r in country_rows if r is not None])
+    .sort_values("n", ascending=False).reset_index(drop=True)
+)
+ 
+# Media type
+media_cols = sorted(c for c in df.columns if c.startswith("media_type_"))
+media_rows = [metrics_for_mask(all_mask, "All")]
+for col in media_cols:
+    name = col.replace("media_type_", "")
+    media_rows.append(metrics_for_mask(merged[col] == 1, name))
+media_df = (
+    pd.DataFrame([r for r in media_rows if r is not None])
+    .sort_values("n", ascending=False).reset_index(drop=True)
+)
+ 
+print("\n=== Country-stratified performance ===")
+print(country_df.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
+ 
+print("\n=== Media-type-stratified performance ===")
+print(media_df.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
+ 
+# Save
+country_df.to_csv(OUTPUT_DIR / "country_stratified.csv", index=False)
+media_df.to_csv(OUTPUT_DIR / "media_stratified.csv", index=False)
